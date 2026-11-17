@@ -121,6 +121,38 @@ Every vector in the database has the same length, the vector dimension. By defau
 
 To fix the dimension instead, set `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` in the environment. The value must be a positive integer. Shorter vectors are padded with zeros to that length. A model whose vectors are longer fails to start, except Gemini, whose vectors are shortened.
 
+## Task Prefixes
+
+Some embedding models are trained with a short prefix that says what kind of text follows, and the prefix for a search query differs from the one for a stored document. The server sends text without a prefix by default. Two settings add one:
+
+| Setting | Environment variable | Applies to |
+|:--------|:---------------------|:-----------|
+| `embeddings.queryTemplate` | `DOCS_MCP_EMBEDDINGS_QUERY_TEMPLATE` | Each search query |
+| `embeddings.documentTemplate` | `DOCS_MCP_EMBEDDINGS_DOCUMENT_TEMPLATE` | Each chunk when it is indexed |
+
+Each value is a template in which `{text}` stands for the query or the chunk. A template without `{text}` is rejected at startup. The placeholder marks where the text goes, so a space before it survives in an environment variable, where surrounding whitespace is trimmed.
+
+The model's own documentation gives the prefixes. For example:
+
+| Model | `queryTemplate` | `documentTemplate` |
+|:------|:----------------|:-------------------|
+| EmbeddingGemma | `task: search result \| query: {text}` | `title: none \| text: {text}` |
+| Nomic Embed Text | `search_query: {text}` | `search_document: {text}` |
+| E5 | `query: {text}` | `passage: {text}` |
+
+```bash
+OPENAI_API_KEY="llama" \
+OPENAI_API_BASE="http://localhost:8080/v1" \
+DOCS_MCP_EMBEDDING_MODEL="embeddinggemma" \
+DOCS_MCP_EMBEDDINGS_QUERY_TEMPLATE="task: search result | query: {text}" \
+DOCS_MCP_EMBEDDINGS_DOCUMENT_TEMPLATE="title: none | text: {text}" \
+npx @arabold/docs-mcp-server@latest
+```
+
+Hosted models such as OpenAI's need no prefix. Leave both settings empty for them.
+
+The document template shapes the vectors stored in the database. After changing it, re-index the libraries so that every chunk is embedded the same way. The server does not detect this change. The query template applies to each search and can change at any time.
+
 ## Changing the Model
 
 Vectors from different models, or of different dimensions, cannot be compared. The database records the model and dimension in use, and the server checks them at every start.
