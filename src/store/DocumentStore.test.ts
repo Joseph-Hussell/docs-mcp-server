@@ -770,6 +770,28 @@ describe("DocumentStore - With Embeddings", () => {
       mockEmbedDocuments.mockClear();
     });
 
+    it("truncates a text that llama.cpp rejects as too large to process", async () => {
+      // llama-server's wording when an input does not fit its physical batch
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        if (texts[0].length > 600) {
+          throw new Error(
+            "500 input (4684 tokens) is too large to process. increase the physical batch size (current batch size: 4096)",
+          );
+        }
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      await store.addDocuments(
+        "llamacpp",
+        "1.0.0",
+        1,
+        createScrapeResult("Long", "https://example.com/long", "x".repeat(1000), ["a"]),
+      );
+
+      const { chunks } = await store.listVersionChunks("llamacpp", "1.0.0", { limit: 5 });
+      expect(chunks.map((chunk) => chunk.hasEmbedding)).toEqual([true]);
+    });
+
     it("splits a batch in half until the provider accepts it", async () => {
       // The provider rejects every batch of more than one text
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {

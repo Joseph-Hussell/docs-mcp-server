@@ -1868,6 +1868,8 @@ export class DocumentStore {
       message.includes("too long") ||
       message.includes("token limit") ||
       message.includes("input is too large") ||
+      // llama.cpp: "input (4684 tokens) is too large to process. increase the physical batch size"
+      message.includes("too large to process") ||
       message.includes("exceeds") ||
       (message.includes("max") && message.includes("token"))
     );
