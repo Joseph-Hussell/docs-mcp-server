@@ -65,9 +65,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private tempFiles: string[] = [];
   private siblingwiseRedirectWarned = false;
   private pendingLlmsTxtProbe: LlmsTxtProbeResult | null = null;
+  private readonly preferMarkdownVariants: boolean;
 
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
+    this.preferMarkdownVariants = config.scraper.preferMarkdownVariants;
     this.shouldFollowLinkFn = options.shouldFollowLink;
     // The browser fallback and the HTML renderer share one Chromium.
     const managedBrowser = new ManagedBrowser(config.scraper);
@@ -121,6 +123,23 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
         : {}),
     };
+  }
+
+  /**
+   * Builds the Markdown variant asked for when `scraper.preferMarkdownVariants`
+   * is on: the page URL with `.md` appended (`/docs/guide` to `/docs/guide.md`),
+   * the convention of sites that publish a Markdown copy of every page. A
+   * directory URL asks for its `index.html.md`, as for llms.txt entries.
+   *
+   * @param url The page URL.
+   * @returns The URL of its Markdown variant.
+   */
+  private buildSiblingMarkdownVariantUrl(url: string): string {
+    const variant = new URL(url);
+    variant.pathname = variant.pathname.endsWith("/")
+      ? `${variant.pathname}index.html.md`
+      : `${variant.pathname}.md`;
+    return variant.toString();
   }
 
   private buildMarkdownVariantUrl(url: string): string {
@@ -269,11 +288,16 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   ): Promise<RawContent> {
     const fetchOptions = this.createFetchOptions(item, options, signal);
 
-    if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
+    if (
+      (!item.fromLlmsTxt && !this.preferMarkdownVariants) ||
+      this.isMarkdownUrl(item.url)
+    ) {
       return await this.fetcher.fetch(item.url, fetchOptions);
     }
 
-    const markdownVariantUrl = this.buildMarkdownVariantUrl(item.url);
+    const markdownVariantUrl = this.preferMarkdownVariants
+      ? this.buildSiblingMarkdownVariantUrl(item.url)
+      : this.buildMarkdownVariantUrl(item.url);
     try {
       const markdownContent = await this.fetcher.fetch(markdownVariantUrl, fetchOptions);
       if (

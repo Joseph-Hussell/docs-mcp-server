@@ -774,6 +774,68 @@ describe("WebScraperStrategy", () => {
     });
   });
 
+  describe("Markdown variants for every page", () => {
+    const preferring = () =>
+      new WebScraperStrategy({
+        ...config,
+        scraper: { ...config.scraper, preferMarkdownVariants: true },
+      });
+
+    it("fetches each crawled page's .md variant and records it under the page URL", async () => {
+      site
+        .page(
+          "/docs/guide.md",
+          "# Guide\n\nSee [Auth](https://example.com/docs/auth).",
+          MARKDOWN,
+        )
+        .page("/docs/auth.md", "# Auth\n\nBody.", MARKDOWN);
+
+      const events = await crawl(
+        { url: `${ROOT}docs/guide`, maxDepth: 1, scope: "hostname" },
+        preferring(),
+      );
+
+      expect(pages()).toEqual(["/docs/guide.md", "/docs/auth.md"]);
+      expect(storedUrls(events)).toEqual([`${ROOT}docs/guide`, `${ROOT}docs/auth`]);
+      expect(events[1]?.result).toMatchObject({ contentType: "text/markdown" });
+    });
+
+    it("falls back to the page itself when the .md variant is missing", async () => {
+      site.notFound("/docs/guide.md").page("/docs/guide", html("Guide"));
+
+      const events = await crawl({ url: `${ROOT}docs/guide`, maxDepth: 0 }, preferring());
+
+      expect(pages()).toEqual(["/docs/guide.md", "/docs/guide"]);
+      expect(storedUrls(events)).toEqual([`${ROOT}docs/guide`]);
+    });
+
+    it("rejects a .md variant served as HTML", async () => {
+      site
+        .page("/docs/guide.md", html("Not Markdown"))
+        .page("/docs/guide", html("Guide"));
+
+      await crawl({ url: `${ROOT}docs/guide`, maxDepth: 0 }, preferring());
+
+      expect(pages()).toEqual(["/docs/guide.md", "/docs/guide"]);
+    });
+
+    it("asks a directory URL for its index.html.md", async () => {
+      site.page("/docs/index.html.md", "# Docs\n\nBody.", MARKDOWN);
+
+      await crawl({ url: `${ROOT}docs/`, maxDepth: 0 }, preferring());
+
+      expect(pages()).toEqual(["/docs/index.html.md"]);
+    });
+
+    it("leaves crawled pages alone when the setting is off", async () => {
+      site.page("/docs/guide", html("Guide"));
+
+      await crawl({ url: `${ROOT}docs/guide`, maxDepth: 0 });
+
+      expect(pages()).toEqual(["/docs/guide"]);
+    });
+  });
+
   describe("queue-time link gate", () => {
     it("never requests a link to binary media or an archive", async () => {
       // None of these has a route, so a request for one would fail the test.
