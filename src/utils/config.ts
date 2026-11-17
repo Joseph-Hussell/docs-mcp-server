@@ -184,6 +184,7 @@ export const DEFAULT_CONFIG = {
   scraper: {
     maxPages: 1000,
     maxDepth: 3,
+    useSitemap: false,
     maxConcurrency: 3,
     // How often a pipeline marks its unfinished jobs alive in the store. A
     // server starting on the same store treats a job as interrupted only after
@@ -318,6 +319,7 @@ export const AppConfigSchema = z.object({
     .object({
       maxPages: z.coerce.number().int().default(DEFAULT_CONFIG.scraper.maxPages),
       maxDepth: z.coerce.number().int().default(DEFAULT_CONFIG.scraper.maxDepth),
+      useSitemap: envBoolean.default(DEFAULT_CONFIG.scraper.useSitemap),
       maxConcurrency: z.coerce
         .number()
         .int()

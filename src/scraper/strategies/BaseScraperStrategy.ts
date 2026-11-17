@@ -274,7 +274,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     // for. Its dead entries must not push the scrape past the failure threshold
     // — that would abort the scrape by the back door, which is exactly what
     // treating those 404s as non-fatal is meant to prevent.
-    if (item.fromLlmsTxt) {
+    // The same holds for sitemap entries, which go stale as pages move.
+    if (item.fromLlmsTxt || item.fromSitemap) {
       return false;
     }
     return !this.isRequestedRoot(item, options) && !this.isRefreshDeletion(item, result);
@@ -549,7 +550,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         // branch above. An llms.txt seed is one of several discovery seeds,
         // and a refresh replays stored pages at their stored depth — neither
         // should abort a scrape whose real root resolved fine.
-        if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+        if (
+          item.depth === 0 &&
+          !item.fromLlmsTxt &&
+          !item.fromSitemap &&
+          item.pageId === undefined
+        ) {
           // Name the type: the user picked this URL, and "some content type"
           // does not tell them whether they mistyped it or asked for a format
           // this server cannot read.

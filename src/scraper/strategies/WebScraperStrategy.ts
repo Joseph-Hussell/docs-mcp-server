@@ -30,6 +30,7 @@ import { fetchPreferringMarkdownVariant } from "../utils/markdownVariant";
 import { isFileLikePath, isPathDescendant } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import { LocalFileStrategy } from "./LocalFileStrategy";
+import { SitemapSeeder } from "./SitemapSeeder";
 
 export interface WebScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
@@ -63,6 +64,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly pipelines: ContentPipeline[];
   private readonly canProcessMimeType: MimeTypeCapabilityPredicate;
   private readonly localFileStrategy: LocalFileStrategy;
+  private readonly sitemapSeeder: SitemapSeeder;
   private tempFiles: string[] = [];
   private siblingwiseRedirectWarned = false;
   private pendingLlmsTxtProbe: LlmsTxtProbeResult | null = null;
@@ -78,6 +80,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     this.pipelines = PipelineFactory.createStandardPipelines(config, managedBrowser);
     this.canProcessMimeType = createMimeTypeCapabilityPredicate(this.pipelines);
     this.localFileStrategy = new LocalFileStrategy(config);
+    this.sitemapSeeder = new SitemapSeeder(config.scraper.useSitemap);
   }
 
   private restorePreservedHash(requestedUrl: string, actualUrl: string): string {
@@ -438,6 +441,40 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return probe ? this.createLlmsTxtQueueItems(options, probe) : [];
   }
 
+  /**
+   * Turns the URLs of the site's sitemap into queue items when the start URL is
+   * processed.
+   *
+   * The URLs go through the admission checks of llms.txt seeds (protocol,
+   * archives, unreadable media, include and exclude patterns, scope), so the two
+   * kinds of seed stay in step. Like llms.txt seeds they enter at depth 0, but
+   * they are marked as sitemap seeds rather than llms.txt seeds, so no Markdown
+   * variant of the llms.txt kind is requested for them.
+   *
+   * @param item The queue item being processed.
+   * @param options Scraper options supplying the admission rules.
+   * @returns The admitted sitemap seeds, or an empty list for any item other
+   *   than one at depth 0.
+   */
+  private createSitemapQueueItems(item: QueueItem, options: ScraperOptions): QueueItem[] {
+    if (item.depth !== 0) {
+      return [];
+    }
+
+    const urls = this.sitemapSeeder.takePending();
+    if (urls.length === 0) {
+      return [];
+    }
+    const admitted = this.createLlmsTxtQueueItems(options, {
+      url: options.url,
+      result: {
+        sections: [],
+        links: urls.map((url) => ({ title: url, url, optional: false })),
+      },
+    });
+    return admitted.map(({ url }) => ({ url, depth: 0, fromSitemap: true }));
+  }
+
   private updateCanonicalBaseUrl(effectiveSource: string, options: ScraperOptions): void {
     // Protocol and host are always adopted from the redirected URL so cross-origin redirects
     // (http->https, apex<->www, port changes) don't drop every discovered link via the host check.
@@ -509,6 +546,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         this.updateCanonicalBaseUrl(effectiveSource, options);
       }
       const llmsTxtQueueItems = this.consumePendingLlmsTxtQueueItems(item, options);
+      llmsTxtQueueItems.push(...this.createSitemapQueueItems(item, options));
 
       logger.debug(
         `Fetch result for ${url}: status=${rawContent.status}, etag=${rawContent.etag || "none"}`,
@@ -674,6 +712,15 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       options,
       signal,
     );
+
+    await this.sitemapSeeder.probe(options.url, (url) => {
+      const { acceptsMimeType: _gate, ...probeOptions } = this.createFetchOptions(
+        { url, depth: 0 },
+        options,
+        signal,
+      );
+      return this.fetcher.fetch(url, probeOptions);
+    });
 
     await super.scrape(options, progressCallback, signal);
   }
