@@ -421,6 +421,19 @@ describe("loadConfig", () => {
         "scraper.security.fileAccess.includeHidden",
         true,
       ],
+      // A string that keeps the space inside it
+      [
+        "DOCS_MCP_EMBEDDINGS_QUERY_TEMPLATE",
+        "task: search result | query: {text}",
+        "embeddings.queryTemplate",
+        "task: search result | query: {text}",
+      ],
+      [
+        "DOCS_MCP_EMBEDDINGS_DOCUMENT_TEMPLATE",
+        "search_document: {text}",
+        "embeddings.documentTemplate",
+        "search_document: {text}",
+      ],
     ];
 
     for (const [name, value, setting, expected] of cases) {
@@ -479,6 +492,9 @@ describe("loadConfig", () => {
       // The embedding dimension must be at least 1.
       ["DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION", "0"],
       ["DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION", "-1"],
+      // An embedding template needs the {text} placeholder.
+      ["DOCS_MCP_EMBEDDINGS_QUERY_TEMPLATE", "search_query:"],
+      ["DOCS_MCP_EMBEDDINGS_DOCUMENT_TEMPLATE", "search_document:"],
     ];
 
     for (const [name, value] of cases) {
@@ -623,6 +639,26 @@ describe("loadConfig", () => {
       expect(isVectorDimensionExplicit(config)).toBe(false);
       expect(parsed.embeddings?.vectorDimension).toBeUndefined();
       expect(content).toContain("docs-mcp-server-managed-vector-dimension-omitted");
+    });
+
+    it("migrates a config generated before settings were added to embeddings", () => {
+      // A file an older release generated holds only the settings that existed then.
+      const {
+        queryTemplate: _queryTemplate,
+        documentTemplate: _documentTemplate,
+        ...legacyEmbeddings
+      } = defaults.embeddings;
+      fs.mkdirSync(managed.dir, { recursive: true });
+      fs.writeFileSync(
+        managedConfigPath(),
+        yaml.stringify({ ...defaults, embeddings: legacyEmbeddings }),
+      );
+
+      const config = loadConfig({}, {});
+
+      expect(isVectorDimensionExplicit(config)).toBe(false);
+      expect(config.embeddings.queryTemplate).toBe("");
+      expect(config.embeddings.documentTemplate).toBe("");
     });
 
     it("treats a user-authored default vectorDimension as explicit", () => {

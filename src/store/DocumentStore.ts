@@ -16,6 +16,7 @@ import {
   ModelConfigurationError,
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
+import { applyEmbeddingTemplate } from "./embeddings/EmbeddingTemplate";
 import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
 import {
   ConnectionError,
@@ -214,6 +215,8 @@ export class DocumentStore {
   private readonly embeddingBatchSize: number;
   private readonly embeddingBatchChars: number;
   private readonly embeddingInitTimeoutMs: number;
+  private readonly embeddingQueryTemplate: string;
+  private readonly embeddingDocumentTemplate: string;
   private modelDimension: number | null = null;
   private readonly embeddingConfig?: EmbeddingModelConfig | null;
   private isVectorSearchEnabled: boolean = false;
@@ -360,6 +363,8 @@ export class DocumentStore {
     this.embeddingBatchSize = this.config.embeddings.batchSize;
     this.embeddingBatchChars = this.config.embeddings.batchChars;
     this.embeddingInitTimeoutMs = this.config.embeddings.initTimeoutMs;
+    this.embeddingQueryTemplate = this.config.embeddings.queryTemplate;
+    this.embeddingDocumentTemplate = this.config.embeddings.documentTemplate;
 
     // Only establish database connection in constructor
     this.db = new Database(dbPath);
@@ -1941,7 +1946,11 @@ export class DocumentStore {
       if (embeddings === null) {
         throw new StoreError("Embeddings are not initialized");
       }
-      return await embeddings.embedDocuments(texts);
+      // The template is applied here, after any truncation by the retry below,
+      // so that a shortened text still carries the model's document prefix.
+      return await embeddings.embedDocuments(
+        texts.map((text) => applyEmbeddingTemplate(this.embeddingDocumentTemplate, text)),
+      );
     } catch (error) {
       // Check if this is a size-related error
       if (this.isInputSizeError(error)) {
@@ -2683,7 +2692,9 @@ export class DocumentStore {
 
       if (this.isVectorSearchEnabled && this.embeddings !== null) {
         // Hybrid search: vector + full-text search with RRF ranking
-        const rawEmbedding = await this.embeddings.embedQuery(query);
+        const rawEmbedding = await this.embeddings.embedQuery(
+          applyEmbeddingTemplate(this.embeddingQueryTemplate, query),
+        );
         const embedding = this.padVector(rawEmbedding);
 
         // Apply overfetch factor to both vector and FTS searches for better recall

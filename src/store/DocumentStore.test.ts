@@ -637,10 +637,79 @@ describe("DocumentStore - With Embeddings", () => {
       expect(mockEmbedDocuments).toHaveBeenCalledTimes(1);
       const embeddedText = mockEmbedDocuments.mock.calls[0][0][0];
 
-      expect(embeddedText).toContain("<title>Test Title</title>");
+      // Without a document template the text starts with the header
+      expect(embeddedText.startsWith("<title>Test Title</title>")).toBe(true);
       expect(embeddedText).toContain("<url>https://example.com/test</url>");
       expect(embeddedText).toContain("<path>path / to / doc</path>");
       expect(embeddedText).toContain("Test content");
+    });
+  });
+
+  describe("Embedding Input Templates", () => {
+    const queryTemplate = "task: search result | query: {text}";
+    const documentTemplate = "title: none | text: {text}";
+
+    beforeEach(async () => {
+      await store.shutdown();
+      store = new DocumentStore(":memory:", {
+        ...appConfig,
+        embeddings: { ...appConfig.embeddings, queryTemplate, documentTemplate },
+      });
+      await store.initialize();
+      vi.mocked(embeddingsOf(store).embedDocuments).mockClear();
+      vi.mocked(embeddingsOf(store).embedQuery).mockClear();
+    });
+
+    it("wraps each indexed chunk in the document template", async () => {
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Guide", "https://example.com/guide", "Chunk body", ["a"]),
+      );
+
+      const [texts] = vi.mocked(embeddingsOf(store).embedDocuments).mock.calls[0];
+      expect(texts).toEqual([
+        "title: none | text: <title>Guide</title>\n<url>https://example.com/guide</url>\n<path>a</path>\nChunk body",
+      ]);
+    });
+
+    it("wraps a search query in the query template", async () => {
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Guide", "https://example.com/guide", "Chunk body", ["a"]),
+      );
+
+      await store.findByContent("templates", "1.0.0", "chunk body", 5);
+
+      expect(vi.mocked(embeddingsOf(store).embedQuery)).toHaveBeenLastCalledWith(
+        "task: search result | query: chunk body",
+      );
+    });
+
+    it("keeps the document template on a text truncated for the model", async () => {
+      const mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        if (texts[0].length > 600) {
+          throw new Error("maximum context length exceeded");
+        }
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Long", "https://example.com/long", "x".repeat(1000), ["a"]),
+      );
+
+      const sent = mockEmbedDocuments.mock.calls.map(([texts]) => texts[0]);
+      expect(sent.length).toBeGreaterThan(1);
+      expect(sent.every((text) => text.startsWith("title: none | text: <title>"))).toBe(
+        true,
+      );
     });
   });
 

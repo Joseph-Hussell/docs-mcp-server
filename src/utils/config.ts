@@ -3,6 +3,10 @@ import path from "node:path";
 import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
+import {
+  EMBEDDING_TEMPLATE_PLACEHOLDER,
+  isValidEmbeddingTemplate,
+} from "../store/embeddings/EmbeddingTemplate";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 import { normalizePublicOrigin, normalizePublicUrl } from "./serverOrigin";
@@ -16,6 +20,15 @@ const managedConfigHeader = [
   "",
 ].join("\n");
 const vectorDimensionPath = ["embeddings", "vectorDimension"];
+// The embeddings settings that config files generated before the vector
+// dimension became implicit contain. Settings added later are not part of them.
+const legacyGeneratedEmbeddingKeys = [
+  "batchSize",
+  "batchChars",
+  "requestTimeoutMs",
+  "initTimeoutMs",
+  "vectorDimension",
+];
 
 const envStringArray = z
   .union([z.array(z.string()), z.string()])
@@ -74,6 +87,16 @@ const blankToUndefined = (value: unknown): unknown => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 };
+
+/**
+ * A string setting holding an embedding input template: empty, or a string
+ * containing the `{text}` placeholder.
+ */
+function embeddingTemplateSchema(setting: string) {
+  return z.string().refine(isValidEmbeddingTemplate, {
+    message: `${setting} must contain the ${EMBEDDING_TEMPLATE_PLACEHOLDER} placeholder, e.g. "search_query: ${EMBEDDING_TEMPLATE_PLACEHOLDER}"`,
+  });
+}
 
 /** Report a normalizer's error as the validation issue of the setting. */
 function addNormalizationIssue(ctx: z.RefinementCtx, error: unknown): void {
@@ -218,6 +241,8 @@ export const DEFAULT_CONFIG = {
     requestTimeoutMs: 30_000,
     initTimeoutMs: 30_000,
     vectorDimension: 1536,
+    queryTemplate: "",
+    documentTemplate: "",
   },
   db: {
     migrationMaxRetries: 5,
@@ -435,6 +460,12 @@ export const AppConfigSchema = z.object({
         .int()
         .min(1, "embedding dimension must be at least 1")
         .default(DEFAULT_CONFIG.embeddings.vectorDimension),
+      queryTemplate: embeddingTemplateSchema("embeddings.queryTemplate").default(
+        DEFAULT_CONFIG.embeddings.queryTemplate,
+      ),
+      documentTemplate: embeddingTemplateSchema("embeddings.documentTemplate").default(
+        DEFAULT_CONFIG.embeddings.documentTemplate,
+      ),
     })
     .default(DEFAULT_CONFIG.embeddings),
   db: z
@@ -828,9 +859,7 @@ function looksLikeLegacyGeneratedEmbeddingDefaults(fileConfig: ConfigObject): bo
     return false;
   }
 
-  return Object.keys(DEFAULT_CONFIG.embeddings).every((key) =>
-    Object.hasOwn(embeddings, key),
-  );
+  return legacyGeneratedEmbeddingKeys.every((key) => Object.hasOwn(embeddings, key));
 }
 
 interface SaveConfigOptions {
