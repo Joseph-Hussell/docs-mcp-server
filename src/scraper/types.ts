@@ -11,6 +11,8 @@ export type QueueItem = {
   etag?: string | null; // Last known ETag for conditional requests during refresh
   /** True when the queue item was seeded from a discovered llms.txt file. */
   fromLlmsTxt?: boolean;
+  /** True when the queue item was seeded from a discovered sitemap. */
+  fromSitemap?: boolean;
   /**
    * The page's own URL, when `url` is the location a representation of it was
    * retrieved from rather than the page itself.

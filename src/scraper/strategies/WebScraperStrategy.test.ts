@@ -88,7 +88,14 @@ const eventFor = (events: ScraperProgressEvent[], url: string) =>
 const followed = (events: ScraperProgressEvent[]): string[] =>
   events.slice(1).map((event) => event.currentUrl);
 
-const isProbe = (requestPath: string) => requestPath.endsWith("/llms.txt");
+const isProbe = (requestPath: string) =>
+  requestPath.endsWith("/llms.txt") || requestPath.endsWith("/sitemap.xml");
+/** A sitemap listing `urls`. */
+const sitemapXml = (...urls: string[]): string =>
+  `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls
+    .map((url) => `<url><loc>${url}</loc></url>`)
+    .join("")}</urlset>`;
+const XML = { type: "application/xml" };
 
 describe("WebScraperStrategy", () => {
   const site = mockSite("https://example.com");
@@ -833,6 +840,114 @@ describe("WebScraperStrategy", () => {
       await crawl({ url: `${ROOT}docs/guide`, maxDepth: 0 });
 
       expect(pages()).toEqual(["/docs/guide"]);
+    });
+  });
+
+  describe("sitemap seeding", () => {
+    const withSitemap = () =>
+      new WebScraperStrategy({
+        ...config,
+        scraper: { ...config.scraper, useSitemap: true },
+      });
+
+    it("crawls the in-scope pages a sitemap lists even when nothing links to them", async () => {
+      site
+        .page("/docs/", html("Docs"))
+        .notFound("/docs/llms.txt")
+        .notFound("/llms.txt")
+        .page(
+          "/docs/sitemap.xml",
+          sitemapXml(
+            `${ROOT}docs/orphan`,
+            `${ROOT}docs/deep/page?x=1&amp;y=2`,
+            `${ROOT}blog/post`,
+          ),
+          XML,
+        )
+        .page("/docs/orphan", html("Orphan"))
+        .page("/docs/deep/page?x=1&y=2", html("Deep"));
+
+      const events = await crawl({ url: `${ROOT}docs/`, maxDepth: 1 }, withSitemap());
+
+      expect(storedUrls(events)).toEqual(
+        expect.arrayContaining([`${ROOT}docs/orphan`, `${ROOT}docs/deep/page?x=1&y=2`]),
+      );
+      // Outside the start URL's subtree
+      expect(site.wasRequested("/blog/post")).toBe(false);
+    });
+
+    it("follows a sitemap index at the site root", async () => {
+      site
+        .page("/docs/", html("Docs"))
+        .notFound("/docs/llms.txt")
+        .notFound("/llms.txt")
+        .notFound("/docs/sitemap.xml")
+        .page(
+          "/sitemap.xml",
+          `<sitemapindex><sitemap><loc>${ROOT}docs-sitemap.xml</loc></sitemap></sitemapindex>`,
+          XML,
+        )
+        .page("/docs-sitemap.xml", sitemapXml(`${ROOT}docs/listed`), XML)
+        .page("/docs/listed", html("Listed"));
+
+      const events = await crawl({ url: `${ROOT}docs/`, maxDepth: 1 }, withSitemap());
+
+      expect(storedUrls(events)).toContain(`${ROOT}docs/listed`);
+    });
+
+    it("applies exclude patterns to sitemap entries", async () => {
+      site
+        .page("/docs/", html("Docs"))
+        .notFound("/docs/llms.txt")
+        .notFound("/llms.txt")
+        .page(
+          "/docs/sitemap.xml",
+          sitemapXml(`${ROOT}docs/keep`, `${ROOT}docs/v1/old`),
+          XML,
+        )
+        .page("/docs/keep", html("Keep"));
+
+      await crawl(
+        { url: `${ROOT}docs/`, maxDepth: 1, excludePatterns: ["/\\/v1\\//"] },
+        withSitemap(),
+      );
+
+      expect(site.wasRequested("/docs/keep")).toBe(true);
+      expect(site.wasRequested("/docs/v1/old")).toBe(false);
+    });
+
+    it("does not count a stale sitemap entry toward the failure threshold", async () => {
+      site
+        .page("/docs/", html("Docs"))
+        .notFound("/docs/llms.txt")
+        .notFound("/llms.txt")
+        .page(
+          "/docs/sitemap.xml",
+          sitemapXml(`${ROOT}docs/gone`, `${ROOT}docs/here`),
+          XML,
+        )
+        .notFound("/docs/gone")
+        .page("/docs/here", html("Here"));
+
+      const events = await crawl(
+        {
+          url: `${ROOT}docs/`,
+          maxDepth: 1,
+          abortOnFailureRate: 0.1,
+        } as Partial<ScraperOptions>,
+        withSitemap(),
+      );
+
+      expect(storedUrls(events)).toContain(`${ROOT}docs/here`);
+    });
+
+    it("does not look for a sitemap when the setting is off", async () => {
+      site.page("/docs/", html("Docs")).notFound("/docs/llms.txt").notFound("/llms.txt");
+
+      await crawl({ url: `${ROOT}docs/`, maxDepth: 0 });
+
+      expect(site.wasRequested("/docs/sitemap.xml")).toBe(false);
+      expect(site.wasRequested("/sitemap.xml")).toBe(false);
     });
   });
 

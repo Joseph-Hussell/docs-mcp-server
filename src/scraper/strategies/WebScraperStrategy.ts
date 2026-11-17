@@ -51,6 +51,31 @@ function isArchivePath(pathname: string): boolean {
   return /\.(zip|tar|gz|tgz)$/i.test(pathname);
 }
 
+/** Most child sitemaps read from one sitemap index. */
+const MAX_CHILD_SITEMAPS = 50;
+/** Most URLs taken from sitemaps for one scrape. */
+const MAX_SITEMAP_URLS = 50_000;
+
+/**
+ * Reads the `<loc>` entries of a sitemap or sitemap index.
+ *
+ * @param xml The sitemap document.
+ * @returns Whether it is a sitemap index, and its locations with XML entities decoded.
+ */
+function parseSitemap(xml: string): { isIndex: boolean; locations: string[] } {
+  const decode = (value: string) =>
+    value
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, "&");
+  const locations = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((match) =>
+    decode(match[1]),
+  );
+  return { isIndex: /<sitemapindex[\s>]/i.test(xml), locations };
+}
+
 interface LlmsTxtProbeResult {
   url: string;
   result: LlmsTxtResult;
@@ -65,11 +90,14 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private tempFiles: string[] = [];
   private siblingwiseRedirectWarned = false;
   private pendingLlmsTxtProbe: LlmsTxtProbeResult | null = null;
+  private pendingSitemapUrls: string[] = [];
   private readonly preferMarkdownVariants: boolean;
+  private readonly useSitemap: boolean;
 
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
     this.preferMarkdownVariants = config.scraper.preferMarkdownVariants;
+    this.useSitemap = config.scraper.useSitemap;
     this.shouldFollowLinkFn = options.shouldFollowLink;
     // The browser fallback and the HTML renderer share one Chromium.
     const managedBrowser = new ManagedBrowser(config.scraper);
@@ -401,6 +429,112 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return null;
   }
 
+  /**
+   * The sitemap locations tried for a scrape: `sitemap.xml` in the start URL's
+   * directory and in each directory above it, up to the site root.
+   */
+  private getSitemapCandidates(inputUrl: string): string[] {
+    const start = new URL(inputUrl);
+    let directory = start.pathname.endsWith("/")
+      ? start.pathname
+      : start.pathname.slice(0, start.pathname.lastIndexOf("/") + 1);
+    const candidates: string[] = [];
+    for (;;) {
+      const candidate = new URL(start.origin);
+      candidate.pathname = `${directory}sitemap.xml`.replace(/\/+/g, "/");
+      candidates.push(candidate.toString());
+      if (directory === "/" || directory === "") break;
+      directory = directory.replace(/[^/]*\/$/, "");
+    }
+    return candidates;
+  }
+
+  /**
+   * Finds the site's sitemap and returns the page URLs it lists.
+   *
+   * Tries the candidates from {@link getSitemapCandidates} in order and stops at
+   * the first that lists any URL. A sitemap index is followed one level down,
+   * reading at most {@link MAX_CHILD_SITEMAPS} child sitemaps. Requests use the
+   * fetcher and outbound access policy of the crawl. Failures are not errors:
+   * the crawl then relies on links and llms.txt alone.
+   *
+   * @param options Scraper options to apply to the requests.
+   * @param signal Optional abort signal.
+   * @returns The listed page URLs, or an empty list.
+   */
+  async probeSitemap(options: ScraperOptions, signal?: AbortSignal): Promise<string[]> {
+    const fetchXml = async (
+      url: string,
+    ): Promise<{ source: string; xml: string } | null> => {
+      try {
+        const { acceptsMimeType: _gate, ...probeOptions } = this.createFetchOptions(
+          { url, depth: 0 },
+          options,
+          signal,
+        );
+        const rawContent = await this.fetcher.fetch(url, probeOptions);
+        if (rawContent.status !== FetchStatus.SUCCESS) {
+          logger.debug(`Sitemap probe failed for ${url}: ${rawContent.status}`);
+          return null;
+        }
+        return {
+          source: rawContent.source,
+          xml: convertToString(rawContent.content, rawContent.charset),
+        };
+      } catch (error) {
+        logger.debug(`Sitemap probe failed for ${url}: ${error}`);
+        return null;
+      }
+    };
+
+    for (const candidate of this.getSitemapCandidates(options.url)) {
+      const fetched = await fetchXml(candidate);
+      if (!fetched) continue;
+      const sitemap = parseSitemap(fetched.xml);
+      let urls = sitemap.locations;
+      if (sitemap.isIndex) {
+        urls = [];
+        for (const child of sitemap.locations.slice(0, MAX_CHILD_SITEMAPS)) {
+          const childSitemap = await fetchXml(new URL(child, fetched.source).href);
+          if (childSitemap) urls.push(...parseSitemap(childSitemap.xml).locations);
+        }
+      }
+      if (urls.length === 0) {
+        logger.debug(`Sitemap probe failed for ${candidate}: no URLs`);
+        continue;
+      }
+      logger.info(`🗺️  Detected sitemap at ${fetched.source} (${urls.length} URLs)`);
+      return urls
+        .slice(0, MAX_SITEMAP_URLS)
+        .map((url) => new URL(url, fetched.source).href);
+    }
+    return [];
+  }
+
+  /**
+   * Turns sitemap URLs into queue items, applying the admission checks of
+   * discovered links (protocol, archives, unreadable media, include and exclude
+   * patterns, scope).
+   */
+  private createSitemapQueueItems(options: ScraperOptions, urls: string[]): QueueItem[] {
+    const items: QueueItem[] = [];
+    for (const url of urls) {
+      try {
+        const targetUrl = new URL(url);
+        if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") continue;
+        if (isArchivePath(targetUrl.pathname)) continue;
+        if (!this.canProcessDiscoveredLink(targetUrl)) continue;
+        if (!this.shouldProcessUrl(targetUrl.href, options)) continue;
+        if (this.shouldFollowLinkFn) {
+          const baseUrl = this.canonicalBaseUrl ?? new URL(options.url);
+          if (!this.shouldFollowLinkFn(baseUrl, targetUrl)) continue;
+        }
+        items.push({ url: targetUrl.href, depth: 0, fromSitemap: true });
+      } catch {}
+    }
+    return items;
+  }
+
   private createLlmsTxtQueueItems(
     options: ScraperOptions,
     probe: LlmsTxtProbeResult,
@@ -448,8 +582,13 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
     const probe = this.pendingLlmsTxtProbe;
     this.pendingLlmsTxtProbe = null;
+    const sitemapUrls = this.pendingSitemapUrls;
+    this.pendingSitemapUrls = [];
 
-    return probe ? this.createLlmsTxtQueueItems(options, probe) : [];
+    return [
+      ...(probe ? this.createLlmsTxtQueueItems(options, probe) : []),
+      ...this.createSitemapQueueItems(options, sitemapUrls),
+    ];
   }
 
   private updateCanonicalBaseUrl(effectiveSource: string, options: ScraperOptions): void {
@@ -688,6 +827,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       options,
       signal,
     );
+    this.pendingSitemapUrls = this.useSitemap
+      ? await this.probeSitemap(options, signal)
+      : [];
 
     await super.scrape(options, progressCallback, signal);
   }

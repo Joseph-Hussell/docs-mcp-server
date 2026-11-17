@@ -193,6 +193,7 @@ export const DEFAULT_CONFIG = {
     preserveHashes: false,
     skipKnownTrackers: true,
     preferMarkdownVariants: false,
+    useSitemap: false,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
     htmlExtractor: "cheerio",
@@ -337,6 +338,7 @@ export const AppConfigSchema = z.object({
       preferMarkdownVariants: envBoolean.default(
         DEFAULT_CONFIG.scraper.preferMarkdownVariants,
       ),
+      useSitemap: envBoolean.default(DEFAULT_CONFIG.scraper.useSitemap),
       pageTimeoutMs: z.coerce
         .number()
         .int()
