@@ -26,6 +26,7 @@ import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { convertToString } from "../utils/buffer";
 import { isLlmsTxtUrl, type LlmsTxtResult, parseLlmsTxt } from "../utils/llmsTxtParser";
+import { fetchPreferringMarkdownVariant } from "../utils/markdownVariant";
 import { isFileLikePath, isPathDescendant } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import { LocalFileStrategy } from "./LocalFileStrategy";
@@ -65,9 +66,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private tempFiles: string[] = [];
   private siblingwiseRedirectWarned = false;
   private pendingLlmsTxtProbe: LlmsTxtProbeResult | null = null;
+  private readonly preferMarkdownVariants: boolean;
 
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
+    this.preferMarkdownVariants = config.scraper.preferMarkdownVariants;
     this.shouldFollowLinkFn = options.shouldFollowLink;
     // The browser fallback and the HTML renderer share one Chromium.
     const managedBrowser = new ManagedBrowser(config.scraper);
@@ -268,6 +271,13 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     signal?: AbortSignal,
   ): Promise<RawContent> {
     const fetchOptions = this.createFetchOptions(item, options, signal);
+
+    if (this.preferMarkdownVariants && !this.isMarkdownUrl(item.url)) {
+      return fetchPreferringMarkdownVariant(item.url, {
+        fetch: (url) => this.fetcher.fetch(url, fetchOptions),
+        isAcceptable: (content) => this.isAcceptableMarkdownVariant(content),
+      });
+    }
 
     if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
       return await this.fetcher.fetch(item.url, fetchOptions);

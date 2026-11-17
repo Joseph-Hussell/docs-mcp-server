@@ -248,6 +248,7 @@ Settings for fetching and crawling. The `scrape` command can override `maxPages`
 | `abortOnFailureRate` | `0.5` | Share of failed pages, from 0 to 1, above which a crawl stops. The start page does not count, and the check begins once 10 pages have finished. |
 | `preserveHashes` | `false` | Keep hash fragments as part of a page's identity, for documentation sites that route with hash URLs (see [Hash Route Behavior](#hash-route-behavior)). |
 | `skipKnownTrackers` | `true` | While a page renders in the browser, block requests to a built-in list of analytics, session replay, chat widget, captcha and social embed hosts. |
+| `preferMarkdownVariants` | `false` | Before fetching a web page, request its Markdown copy at the page URL plus `.md` (`/docs/guide.md`; `index.html.md` for a directory URL) and index that instead when the server returns Markdown. The page keeps its own URL. Turn it on for sites that publish a Markdown copy of every page; elsewhere it costs one extra request per page. |
 | `htmlExtractor` | `cheerio` | How content is extracted from HTML pages: `cheerio` (the default) or `defuddle`, an alternative kept for comparison. See [Search Quality Benchmark](../guides/benchmarking.md). |
 | `pageTimeoutMs` | `5000` | Timeout for each wait while a page renders (content, iframes, network idle) and for closing a page or the browser (ms). A browser that does not close in time is killed. |
 | `browserTimeoutMs` | `30000` | Timeout for a page navigation in the browser, used by the browser fetcher and the Playwright renderer (ms). |
