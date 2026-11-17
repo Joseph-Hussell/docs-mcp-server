@@ -16,6 +16,7 @@ import {
   ModelConfigurationError,
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
+import { applyEmbeddingTemplate } from "./embeddings/EmbeddingTemplate";
 import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
 import {
   ConnectionError,
@@ -1941,7 +1942,13 @@ export class DocumentStore {
       if (embeddings === null) {
         throw new StoreError("Embeddings are not initialized");
       }
-      return await embeddings.embedDocuments(texts);
+      // The template is applied here, after any truncation by the retry below,
+      // so that a shortened text still carries the model's document prefix.
+      return await embeddings.embedDocuments(
+        texts.map((text) =>
+          applyEmbeddingTemplate(this.config.embeddings.documentTemplate, text),
+        ),
+      );
     } catch (error) {
       // Check if this is a size-related error
       if (this.isInputSizeError(error)) {
@@ -2683,7 +2690,9 @@ export class DocumentStore {
 
       if (this.isVectorSearchEnabled && this.embeddings !== null) {
         // Hybrid search: vector + full-text search with RRF ranking
-        const rawEmbedding = await this.embeddings.embedQuery(query);
+        const rawEmbedding = await this.embeddings.embedQuery(
+          applyEmbeddingTemplate(this.config.embeddings.queryTemplate, query),
+        );
         const embedding = this.padVector(rawEmbedding);
 
         // Apply overfetch factor to both vector and FTS searches for better recall

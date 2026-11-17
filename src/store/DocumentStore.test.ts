@@ -644,6 +644,94 @@ describe("DocumentStore - With Embeddings", () => {
     });
   });
 
+  describe("Embedding Input Templates", () => {
+    const queryTemplate = "task: search result | query: {text}";
+    const documentTemplate = "title: none | text: {text}";
+
+    beforeEach(async () => {
+      await store.shutdown();
+      store = new DocumentStore(":memory:", {
+        ...appConfig,
+        embeddings: { ...appConfig.embeddings, queryTemplate, documentTemplate },
+      });
+      await store.initialize();
+      vi.mocked(embeddingsOf(store).embedDocuments).mockClear();
+      vi.mocked(embeddingsOf(store).embedQuery).mockClear();
+    });
+
+    it("wraps each indexed chunk in the document template", async () => {
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Guide", "https://example.com/guide", "Chunk body", ["a"]),
+      );
+
+      const [texts] = vi.mocked(embeddingsOf(store).embedDocuments).mock.calls[0];
+      expect(texts).toEqual([
+        "title: none | text: <title>Guide</title>\n<url>https://example.com/guide</url>\n<path>a</path>\nChunk body",
+      ]);
+    });
+
+    it("wraps a search query in the query template", async () => {
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Guide", "https://example.com/guide", "Chunk body", ["a"]),
+      );
+
+      await store.findByContent("templates", "1.0.0", "chunk body", 5);
+
+      expect(vi.mocked(embeddingsOf(store).embedQuery)).toHaveBeenLastCalledWith(
+        "task: search result | query: chunk body",
+      );
+    });
+
+    it("keeps the document template on a text truncated for the model", async () => {
+      const mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        if (texts[0].length > 600) {
+          throw new Error("maximum context length exceeded");
+        }
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Long", "https://example.com/long", "x".repeat(1000), ["a"]),
+      );
+
+      const sent = mockEmbedDocuments.mock.calls.map(([texts]) => texts[0]);
+      expect(sent.length).toBeGreaterThan(1);
+      expect(sent.every((text) => text.startsWith("title: none | text: <title>"))).toBe(
+        true,
+      );
+    });
+
+    it("sends each indexed chunk unchanged when no document template is set", async () => {
+      await store.shutdown();
+      store = new DocumentStore(":memory:", appConfig);
+      await store.initialize();
+      const mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockClear();
+
+      await store.addDocuments(
+        "templates",
+        "1.0.0",
+        1,
+        createScrapeResult("Guide", "https://example.com/guide", "Chunk body", ["a"]),
+      );
+
+      const [texts] = mockEmbedDocuments.mock.calls[0];
+      expect(texts).toEqual([
+        "<title>Guide</title>\n<url>https://example.com/guide</url>\n<path>a</path>\nChunk body",
+      ]);
+    });
+  });
+
   describe("Status Tracking and Metadata", () => {
     const backdated = "2000-01-01 00:00:00";
 

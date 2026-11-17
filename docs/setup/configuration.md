@@ -399,6 +399,8 @@ Settings for generating vector embeddings. [Embedding Models](../guides/embeddin
 | `requestTimeoutMs` | `30000` | Timeout for each request to OpenAI or an OpenAI-compatible server (ms). |
 | `initTimeoutMs` | `30000` | Timeout for the test embedding that detects the dimension of a model the server does not know (ms). |
 | `vectorDimension` | `1536` | Dimension of the stored vectors. A positive integer. Without an explicit value, the server uses the model's own dimension. Changing it asks for confirmation on the next start. See [Vector Dimension](../guides/embedding-models.md#vector-dimension). |
+| `queryTemplate` | `""` | Template for the text of a search query sent to the embedding model, with `{text}` where the query goes. Empty sends the query unchanged. See [Task Prefixes](../guides/embedding-models.md#task-prefixes). |
+| `documentTemplate` | `""` | Template for the text of each indexed chunk sent to the embedding model, with `{text}` where the chunk goes. Empty sends the chunk unchanged. Re-index libraries after changing it. |
 
 ### Search (`search`)
 
